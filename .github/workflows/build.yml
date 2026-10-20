@@ -99,9 +99,22 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist/* -DestinationPath "opentrack-${{ env.MODULE }}-${{ github.ref_name }}-for-${{ env.OPENTRACK_TAG }}.zip"
 
+      # The annotated tag's message is the release description; GitHub's
+      # generated notes (commit list, full-changelog link) are appended.
+      - name: Release notes from the tag message
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $notes = git -C plugin tag -l --format='%(contents)' "${{ github.ref_name }}"
+          if (-not $notes) { $notes = "Build of ${{ env.MODULE }} for opentrack ${{ env.OPENTRACK_TAG }}." }
+          $notes | Set-Content -Encoding utf8 RELEASE_NOTES.md
+          Get-Content RELEASE_NOTES.md
+
       - name: GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: "${{ github.ref_name }} — for opentrack ${{ env.OPENTRACK_TAG }}"
+          body_path: RELEASE_NOTES.md
           files: "*.zip"
           generate_release_notes: true
