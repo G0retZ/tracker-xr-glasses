@@ -1,0 +1,107 @@
+name: Build
+
+# Builds opentrack-tracker-xr-glasses.dll against a pinned opentrack release.
+#
+# opentrack has no plugin ABI versioning: a tracker DLL only works with the
+# opentrack build it was compiled against (same source tag, same Qt, same
+# compiler family). The pair below must match the opentrack release users run.
+# No vendor SDK is involved: the plugin speaks the glasses' USB protocols itself.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  OPENTRACK_TAG: opentrack-2026.1.0
+  QT_VERSION: 6.10.1
+  MODULE: tracker-xr-glasses
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Checkout opentrack ${{ env.OPENTRACK_TAG }}
+        uses: actions/checkout@v4
+        with:
+          repository: opentrack/opentrack
+          ref: ${{ env.OPENTRACK_TAG }}
+          path: otr
+          submodules: true
+
+      - name: Install Qt ${{ env.QT_VERSION }}
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtserialport qtmultimedia qtimageformats
+          cache: true
+
+      - uses: seanmiddleditch/gha-setup-ninja@master
+
+      - name: MSVC x64 environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Drop the module into opentrack's source tree
+        shell: pwsh
+        run: Copy-Item -Recurse "plugin/${{ env.MODULE }}" "otr/${{ env.MODULE }}"
+
+      # opentrack's opencv helper references opencv_* targets even when OpenCV
+      # is absent, which fails the generate step. Swap in a guarded copy.
+      - name: Patch opentrack for a build without OpenCV
+        shell: pwsh
+        run: Copy-Item -Force plugin/ci/opentrack-opencv.cmake otr/cmake/opentrack-opencv.cmake
+
+      # OPENTRACK_USERCONFIG overrides opentrack's per-username settings file;
+      # the runner's username matches one opentrack commits for its own CI,
+      # and that one requires a pre-built OpenCV we don't need.
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -G Ninja -S otr -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DQt6_DIR="$env:QT_ROOT_DIR/lib/cmake/Qt6"
+          -DOPENTRACK_USERCONFIG="$env:GITHUB_WORKSPACE/plugin/ci/opentrack-userconfig.cmake"
+
+      - name: Build the module
+        shell: pwsh
+        run: cmake --build build --target opentrack-${{ env.MODULE }}
+
+      - name: Collect artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $dll = Get-ChildItem -Recurse build -Filter "opentrack-${{ env.MODULE }}.dll" | Select-Object -First 1
+          if (-not $dll) { throw "DLL not found" }
+          Copy-Item $dll.FullName dist/
+          Copy-Item plugin/README.md, plugin/NOTICE.md, plugin/LICENSE dist/
+          "opentrack: ${{ env.OPENTRACK_TAG }}`nQt: ${{ env.QT_VERSION }}`nplugin: ${{ github.sha }}" | Set-Content dist/BUILD-INFO.txt
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opentrack-${{ env.MODULE }}-${{ env.OPENTRACK_TAG }}
+          path: dist/
+
+      - name: Package release zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath "opentrack-${{ env.MODULE }}-${{ github.ref_name }}-for-${{ env.OPENTRACK_TAG }}.zip"
+
+      - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.zip"
+          generate_release_notes: true
