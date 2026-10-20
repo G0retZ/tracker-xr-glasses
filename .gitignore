@@ -1,0 +1,24 @@
+# CMake / build output
+build/
+out/
+cmake-build-*/
+
+# opentrack checkout used for local/CI builds
+otr/
+
+# IDE / OS noise
+.vs/
+.vscode/
+.idea/
+*.user
+*.swp
+.DS_Store
+Thumbs.db
+
+# Translation stubs opentrack's build writes into the module directory
+tracker-xr-glasses/lang/
+
+# Never commit binaries
+*.dll
+*.lib
+*.pdb
